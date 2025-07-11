@@ -3,10 +3,12 @@ import os
 import pathlib
 import random
 from os.path import join
+from typing import List, Tuple, Optional
 
 import numpy as np
 import pygame
 import tensorflow as tf
+import numpy.typing as npt
 # Import pygame.locals for easier access to key coordinates
 from pygame.locals import (
     K_ESCAPE,
@@ -17,6 +19,39 @@ from pygame.locals import (
 import gann
 from globals import *
 from player import Player
+
+import logging
+import time
+from datetime import datetime
+
+# Setup basic logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('genetic_training.log'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+
+def validate_player_position(player: Player) -> bool:
+    """Validate that player position is within grid bounds"""
+    if not (0 <= player.x <= 20 and 0 <= player.y <= 20):
+        print(f"Warning: Player position out of bounds: ({player.x}, {player.y})")
+        return False
+    return True
+
+
+def validate_target_position(target_x: int, target_y: int) -> bool:
+    """Validate that target position is within grid bounds"""
+    grid_x, grid_y = x_conv(target_x), y_conv(target_y)
+    if not (0 <= grid_x <= 20 and 0 <= grid_y <= 20):
+        print(f"Warning: Target position out of bounds: ({grid_x}, {grid_y})")
+        return False
+    return True
 
 
 # Drawing functions
@@ -132,22 +167,28 @@ def move(p: Player):
         p.rect.move_ip(0, -b_size)
 
     # Keep player on the screen and check lose status
+    # Check boundaries BEFORE correcting position to avoid inconsistency
+    if (p.rect.left <= left_margin or 
+        p.rect.right >= b_size * 20 + left_margin or
+        p.rect.top <= top_margin or 
+        p.rect.bottom >= b_size * 20 + top_margin):
+        p.lose_status = True
+    
+    # Then correct position after lose status is set
     if p.rect.left <= left_margin:
         p.rect.left = left_margin
-        p.lose_status = True
     if p.rect.right >= b_size * 20 + left_margin:
         p.rect.right = b_size * 20 + left_margin
-        p.lose_status = True
     if p.rect.top <= top_margin:
         p.rect.top = top_margin
-        p.lose_status = True
     if p.rect.bottom >= b_size * 20 + top_margin:
         p.rect.bottom = b_size * 20 + top_margin
-        p.lose_status = True
 
-    # Check win status
+    # Check win status immediately after movement
     if p.rect.left == t_px_pos_x and p.rect.top == t_px_pos_y:
         p.win_status = True
+        # Stop further movement for this player
+        return
 
 
 def define_quadrant(p: Player):
@@ -173,6 +214,10 @@ def define_y_angle(x_angle):
 
 
 def update_player(p: Player, steps):
+    # Only update if player is still active
+    if p.lose_status or p.win_status:
+        return
+        
     # Update player info every round
     p.x = x_conv(p.rect.left)
     p.y = y_conv(p.rect.top)
@@ -185,17 +230,11 @@ def update_player(p: Player, steps):
     p.x_angle = define_x_angle(p)
     p.y_angle = define_y_angle(p.x_angle)
     p.steps = steps
-    # Update fitness every round
+    # Update fitness only for active players
     p.nn.fitness_update(p.distance)
     # Save max fitness info
     if p.nn.fitness > p.nn.max_fitness:
         p.nn.max_fitness = p.nn.fitness
-
-    # Debug
-    # print("Position = {},{}".format(p.x, p.y))
-    # print("Quadrant = {}".format(p.quadrant))
-    # print("X angle = {}".format(p.x_angle * 180 / (2 * math.pi)))
-    # print("Y angle = {}".format(p.y_angle * 180 / (2 * math.pi)))
 
 
 def reset_players(players_array):
@@ -227,12 +266,26 @@ def randomize_objectives():
 
 
 def update_generation(generation, players, children):
-    # Log the current generation
+    # Calculate generation statistics
+    active_players = [p for p in players if not (p.lose_status or p.win_status)]
+    winners = [p for p in players if p.win_status]
+    fitness_scores = [p.nn.fitness for p in players]
+    
+    avg_fitness = sum(fitness_scores) / len(fitness_scores) if fitness_scores else 0
+    max_fitness = max(fitness_scores) if fitness_scores else 0
+    success_rate = len(winners) / len(players) if players else 0
+    avg_steps = sum(p.steps for p in players) / len(players) if players else 0
+    
+    # Log the current generation with statistics
     print('Generation: ', generation)
-
-    # fitness_ranking = []
-    # for p in range(1, population + 1):
-    #     fitness_ranking.append(players[p].nn)
+    logger.info(f"Generation {generation}: "
+                f"Avg Fitness={avg_fitness:.4f}, "
+                f"Max Fitness={max_fitness:.4f}, "
+                f"Success Rate={success_rate:.2%}, "
+                f"Avg Steps={avg_steps:.1f}")
+    
+    # Print to console as well
+    print(f"  Stats: Avg Fitness={avg_fitness:.4f}, Winners={len(winners)}/{len(players)}, Steps={avg_steps:.1f}")
 
     # Sort based on fitness
     fitness_ranking = sorted(players, key=lambda x: x.nn.fitness)
@@ -266,6 +319,21 @@ def update_generation(generation, players, children):
     for i in range(0, len(players)):  # All players are AI now
         if i < len(children):  # Safety check
             players[i].nn = children[i].nn
+
+
+def tournament_selection(population, tournament_size=3):
+    """Select parent using tournament selection for better genetic diversity"""
+    tournament = random.sample(population, min(tournament_size, len(population)))
+    return max(tournament, key=lambda p: p.nn.fitness)
+
+def calculate_diversity_bonus(player, population):
+    """Add small fitness bonus for unique behaviors to encourage diversity"""
+    # Simple diversity measure: distance from average position
+    avg_x = sum(p.x for p in population) / len(population)
+    avg_y = sum(p.y for p in population) / len(population)
+    
+    position_uniqueness = math.sqrt((player.x - avg_x)**2 + (player.y - avg_y)**2)
+    return min(0.1, position_uniqueness / 20.0)  # Cap at 10% bonus
 
 
 def main():

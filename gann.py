@@ -50,12 +50,27 @@ class GeneticANN(Sequential):
         self.fitness_array = []
         self.max_fitness = 0
         self.mean_fitness = 0
-        # If no weights provided randomly generate them
-        # Layers are created and randomly generated
-        layer1 = Dense(self.i_size, input_shape=(self.i_size,), activation='tanh', bias_initializer='random_normal')
-        layer2 = Dense(self.h1_size, activation='tanh', bias_initializer='random_normal')
-        layer3 = Dense(self.h2_size, activation='tanh', bias_initializer='random_normal')
-        layer4 = Dense(self.o_size, activation='softmax')
+        
+        # Use better weight initialization for more stable training
+        # Layers are created with Xavier/Glorot initialization
+        layer1 = Dense(self.i_size, 
+                      input_shape=(self.i_size,), 
+                      activation='tanh', 
+                      kernel_initializer='glorot_uniform',
+                      bias_initializer='zeros')
+        layer2 = Dense(self.h1_size, 
+                      activation='tanh',
+                      kernel_initializer='glorot_uniform', 
+                      bias_initializer='zeros')
+        layer3 = Dense(self.h2_size, 
+                      activation='tanh',
+                      kernel_initializer='glorot_uniform',
+                      bias_initializer='zeros')
+        layer4 = Dense(self.o_size, 
+                      activation='softmax',
+                      kernel_initializer='glorot_uniform',
+                      bias_initializer='zeros')
+        
         # Layers are added to the model
         self.add(layer1)
         self.add(layer2)
