@@ -8,18 +8,13 @@ down_margin = 20
 
 # Evolution Parameters
 generations = 100
-population = 50
-
-# Neural Network Architecture
-i_size = 8      # Input layer size (8 features)
-h1_size = 8     # First hidden layer size
-h2_size = 6     # Second hidden layer size  
-o_size = 4      # Output layer size (4 movement directions)
+population = 100  # Increased population for more diversity
+max_steps = 60  # Increased steps to allow for more exploration
 
 # Genetic Algorithm Parameters
-mutation_rate = 0.4     # Threshold for mutation (lower = more mutation)
-mutation_strength_kernel = 1.5  # Multiplier for kernel weight mutations
-mutation_strength_bias = 0.5    # Multiplier for bias weight mutations
+mutation_rate = 0.3  # Increased mutation rate to encourage more exploration
+mutation_strength_kernel = 0.3  # Increased mutation strength
+mutation_strength_bias = 0.15  # Increased mutation strength
 
 # Colors
 PLAYER_RED = (230, 51, 51)

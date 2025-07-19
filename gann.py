@@ -28,19 +28,11 @@ if gpus:
 
 # New Type of Neural Network
 class GeneticANN(Sequential):
-    # Inputs
-    # Player x, y
-    # Target x, y
-    # Distance
-    # Quadrant
-    # Angle
-    i_size = globals.i_size
-    h1_size = globals.h1_size
-    h2_size = globals.h2_size
-    o_size = globals.o_size
-
-    # Outputs
-    # Move Up, Down, Left, Right
+    # Define architecture inside the class for better modularity
+    i_size = 4  # Simplified input: player_x, player_y, delta_x, delta_y
+    h1_size = 8  # Adjusted complexity
+    h2_size = 8  # Adjusted complexity
+    o_size = 4
 
     # Constructor
     def __init__(self):
@@ -53,20 +45,16 @@ class GeneticANN(Sequential):
         
         # Use better weight initialization for more stable training
         # Layers are created with Xavier/Glorot initialization
-        layer1 = Dense(self.i_size, 
+        layer1 = Dense(self.h1_size,  # Corrected layer size
                       input_shape=(self.i_size,), 
                       activation='tanh', 
                       kernel_initializer='glorot_uniform',
                       bias_initializer='zeros')
-        layer2 = Dense(self.h1_size, 
+        layer2 = Dense(self.h2_size, 
                       activation='tanh',
                       kernel_initializer='glorot_uniform', 
                       bias_initializer='zeros')
-        layer3 = Dense(self.h2_size, 
-                      activation='tanh',
-                      kernel_initializer='glorot_uniform',
-                      bias_initializer='zeros')
-        layer4 = Dense(self.o_size, 
+        layer3 = Dense(self.o_size, 
                       activation='softmax',
                       kernel_initializer='glorot_uniform',
                       bias_initializer='zeros')
@@ -75,138 +63,67 @@ class GeneticANN(Sequential):
         self.add(layer1)
         self.add(layer2)
         self.add(layer3)
-        self.add(layer4)
 
-    def fitness_update(self, distance):
-        # Calculate max possible distance dynamically
-        max_distance = math.sqrt(20**2 + 20**2)  # Grid is 20x20
-        self.fitness = (1 - distance / max_distance)
+    def fitness_update(self, distance, steps):
+        # Reward path efficiency and proximity to target
+        # Normalize distance and steps
+        max_distance = math.sqrt(20**2 + 20**2)
+        normalized_distance = distance / max_distance
+        
+        # Encourage fewer steps, penalize more steps
+        step_efficiency = 1.0 - (steps / 30.0)  # 30 is max_steps
+        
+        # Combine metrics: 70% distance, 30% efficiency
+        self.fitness = (0.7 * (1 - normalized_distance)) + (0.3 * step_efficiency)
+        
+        # Add a bonus for reaching the target
+        if distance == 0:
+            self.fitness += 0.5  # Bonus for success
+            
         self.fitness_array.append(self.fitness)
         self.mean_fitness = np.mean(self.fitness_array)
 
 
-# Chance to mutate weights
-def mutation(child_weights):
-    # Add a chance for random mutation
-    # child_weights is a list with [kernel_weights, bias_weights]
-    mut = random.uniform(0, 1)
-    if mut >= globals.mutation_rate:
-        # Mutate kernel weights (2D array)
-        kernel_shape = child_weights[0].shape
-        for _ in range(2):  # Apply mutations to 2 random kernel weights
-            i = random.randint(0, kernel_shape[0] - 1)
-            j = random.randint(0, kernel_shape[1] - 1)
-            child_weights[0][i, j] *= random.random() * globals.mutation_strength_kernel
-        
-        # Mutate bias weights (1D array)
-        bias_shape = child_weights[1].shape
-        for _ in range(2):  # Apply mutations to 2 random bias weights
-            i = random.randint(0, bias_shape[0] - 1)
-            child_weights[1][i] *= random.random() * globals.mutation_strength_bias
-    else:
-        # No mutation
-        pass
+# More efficient mutation
+def mutation(child: 'GeneticANN'):
+    # Mutate weights by adding random noise
+    if random.random() < globals.mutation_rate:
+        for layer in child.layers:
+            weights = layer.get_weights()
+            # Mutate kernel weights
+            kernel_weights = weights[0]
+            # Add small random values to a portion of weights
+            mask = np.random.choice([0, 1], size=kernel_weights.shape, p=[0.9, 0.1])
+            noise = np.random.normal(0, globals.mutation_strength_kernel, kernel_weights.shape)
+            weights[0] = kernel_weights + (noise * mask)
+            
+            # Mutate bias weights
+            bias_weights = weights[1]
+            mask = np.random.choice([0, 1], size=bias_weights.shape, p=[0.9, 0.1])
+            noise = np.random.normal(0, globals.mutation_strength_bias, bias_weights.shape)
+            weights[1] = bias_weights + (noise * mask)
+            
+            layer.set_weights(weights)
 
 
-# Crossover traits between two Genetic Neural Networks
-def dynamic_crossover(parent_1, parent_2) -> GeneticANN:
-    # A new child is born
+# More efficient and standard crossover
+def dynamic_crossover(parent_1: 'GeneticANN', parent_2: 'GeneticANN') -> 'GeneticANN':
     child = GeneticANN()
     
-    # Layer 1 (input to first hidden)
-    p1_weights = parent_1.layers[0].get_weights()
-    p2_weights = parent_2.layers[0].get_weights()
-    child_weights_l1 = [np.zeros_like(p1_weights[0]), np.zeros_like(p1_weights[1])]
+    # Randomly select a layer to swap weights and biases
+    crossover_point = random.randint(0, len(parent_1.layers) - 1)
     
-    # Crossover weights
-    for w_I in range(p1_weights[0].shape[0]):
-        for w_J in range(p1_weights[0].shape[1]):
-            roll_d20 = random.randint(0, 20)
-            if roll_d20 < 10:
-                child_weights_l1[0][w_I, w_J] = p1_weights[0][w_I, w_J]
-            else:
-                child_weights_l1[0][w_I, w_J] = p2_weights[0][w_I, w_J]
-    
-    # Crossover biases
-    for b_I in range(len(p1_weights[1])):
-        roll_d20 = random.randint(0, 20)
-        if roll_d20 < 10:
-            child_weights_l1[1][b_I] = p1_weights[1][b_I]
+    for i, (p1_layer, p2_layer, child_layer) in enumerate(zip(parent_1.layers, parent_2.layers, child.layers)):
+        p1_weights = p1_layer.get_weights()
+        p2_weights = p2_layer.get_weights()
+        
+        # Before crossover point, take from parent 1
+        if i < crossover_point:
+            child_layer.set_weights(p1_weights)
+        # After crossover point, take from parent 2
         else:
-            child_weights_l1[1][b_I] = p2_weights[1][b_I]
-    
-    mutation(child_weights_l1)
-    child.layers[0].set_weights(child_weights_l1)
-
-    # Layer 2 (first hidden to second hidden)
-    p1_weights = parent_1.layers[1].get_weights()
-    p2_weights = parent_2.layers[1].get_weights()
-    child_weights_l2 = [np.zeros_like(p1_weights[0]), np.zeros_like(p1_weights[1])]
-    
-    for w_I in range(p1_weights[0].shape[0]):
-        for w_J in range(p1_weights[0].shape[1]):
-            roll_d20 = random.randint(0, 20)
-            if roll_d20 < 10:
-                child_weights_l2[0][w_I, w_J] = p1_weights[0][w_I, w_J]
-            else:
-                child_weights_l2[0][w_I, w_J] = p2_weights[0][w_I, w_J]
-    
-    for b_I in range(len(p1_weights[1])):
-        roll_d20 = random.randint(0, 20)
-        if roll_d20 < 10:
-            child_weights_l2[1][b_I] = p1_weights[1][b_I]
-        else:
-            child_weights_l2[1][b_I] = p2_weights[1][b_I]
-    
-    mutation(child_weights_l2)
-    child.layers[1].set_weights(child_weights_l2)
-
-    # Layer 3 (second hidden to third hidden)
-    p1_weights = parent_1.layers[2].get_weights()
-    p2_weights = parent_2.layers[2].get_weights()
-    child_weights_l3 = [np.zeros_like(p1_weights[0]), np.zeros_like(p1_weights[1])]
-    
-    for w_I in range(p1_weights[0].shape[0]):
-        for w_J in range(p1_weights[0].shape[1]):
-            roll_d20 = random.randint(0, 20)
-            if roll_d20 < 10:
-                child_weights_l3[0][w_I, w_J] = p1_weights[0][w_I, w_J]
-            else:
-                child_weights_l3[0][w_I, w_J] = p2_weights[0][w_I, w_J]
-    
-    for b_I in range(len(p1_weights[1])):
-        roll_d20 = random.randint(0, 20)
-        if roll_d20 < 10:
-            child_weights_l3[1][b_I] = p1_weights[1][b_I]
-        else:
-            child_weights_l3[1][b_I] = p2_weights[1][b_I]
-    
-    mutation(child_weights_l3)
-    child.layers[2].set_weights(child_weights_l3)
-
-    # Layer 4 (third hidden to output)
-    p1_weights = parent_1.layers[3].get_weights()
-    p2_weights = parent_2.layers[3].get_weights()
-    child_weights_l4 = [np.zeros_like(p1_weights[0]), np.zeros_like(p1_weights[1])]
-    
-    for w_I in range(p1_weights[0].shape[0]):
-        for w_J in range(p1_weights[0].shape[1]):
-            roll_d20 = random.randint(0, 20)
-            if roll_d20 < 10:
-                child_weights_l4[0][w_I, w_J] = p1_weights[0][w_I, w_J]
-            else:
-                child_weights_l4[0][w_I, w_J] = p2_weights[0][w_I, w_J]
-    
-    for b_I in range(len(p1_weights[1])):
-        roll_d20 = random.randint(0, 20)
-        if roll_d20 < 10:
-            child_weights_l4[1][b_I] = p1_weights[1][b_I]
-        else:
-            child_weights_l4[1][b_I] = p2_weights[1][b_I]
-    
-    mutation(child_weights_l4)
-    child.layers[3].set_weights(child_weights_l4)
-
+            child_layer.set_weights(p2_weights)
+            
     return child
 
 

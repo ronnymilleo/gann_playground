@@ -136,17 +136,16 @@ def random_position():
 
 
 def move(p: Player):
-    # Configure inputs of neural network and evaluate outputs
-    nn_input = [p.x / 20,
-                p.y / 20,
-                p.distance / math.sqrt(20**2 + 20**2),  # Use dynamic max distance
-                p.quadrant / 4,
-                p.x_angle,
-                p.y_angle,
-                x_conv(t_px_pos_x) / 20,
-                y_conv(t_px_pos_y) / 20]
+    # Simplified and more effective inputs
+    delta_x = (x_conv(t_px_pos_x) - p.x) / 20.0  # Normalized delta_x
+    delta_y = (y_conv(t_px_pos_y) - p.y) / 20.0  # Normalized delta_y
     
-    input_tensor = tf.convert_to_tensor([nn_input])  # Proper batch dimension
+    nn_input = [p.x / 20.0, 
+                p.y / 20.0, 
+                delta_x, 
+                delta_y]
+    
+    input_tensor = tf.convert_to_tensor([nn_input], dtype=tf.float32)
     p.nn_output = p.nn(input_tensor, training=False)
     
     # Add safety check for neural network output
@@ -191,26 +190,7 @@ def move(p: Player):
         return
 
 
-def define_quadrant(p: Player):
-    if p.x > 10 and p.y > 10:
-        return 1
-    elif p.x > 10 and p.y <= 10:
-        return 4
-    elif p.x <= 10 and p.y > 10:
-        return 2
-    else:  # p.x <= 10 and p.y <= 10
-        return 3
 
-
-def define_x_angle(p: Player):
-    if p.x - x_conv(t_px_pos_x) == 0:
-        return math.pi / 2
-    else:
-        return math.atan(abs((p.y - y_conv(t_px_pos_y)) / (p.x - x_conv(t_px_pos_x))))
-
-
-def define_y_angle(x_angle):
-    return math.pi / 2 - x_angle
 
 
 def update_player(p: Player, steps):
@@ -226,12 +206,9 @@ def update_player(p: Player, steps):
                                     y_conv(t_px_pos_y),
                                     p.x,
                                     p.y)
-    p.quadrant = define_quadrant(p)
-    p.x_angle = define_x_angle(p)
-    p.y_angle = define_y_angle(p.x_angle)
     p.steps = steps
     # Update fitness only for active players
-    p.nn.fitness_update(p.distance)
+    p.nn.fitness_update(p.distance, p.steps)
     # Save max fitness info
     if p.nn.fitness > p.nn.max_fitness:
         p.nn.max_fitness = p.nn.fitness
@@ -248,10 +225,6 @@ def reset_players(players_array):
                                              y_conv(t_px_pos_y),
                                              player.x,
                                              player.y)
-        # Recalculate derived values instead of hardcoding
-        player.quadrant = define_quadrant(player)
-        player.x_angle = define_x_angle(player)
-        player.y_angle = define_y_angle(player.x_angle)
         player.steps = 0  # Reset step counter
 
 
@@ -288,37 +261,36 @@ def update_generation(generation, players, children):
     print(f"  Stats: Avg Fitness={avg_fitness:.4f}, Winners={len(winners)}/{len(players)}, Steps={avg_steps:.1f}")
 
     # Sort based on fitness
-    fitness_ranking = sorted(players, key=lambda x: x.nn.fitness)
-    fitness_ranking.reverse()
+    fitness_ranking = sorted(players, key=lambda x: x.nn.fitness, reverse=True)
 
-    # Save the best 5 every generation (overwrite previous)
-    for i in range(0, 5):
-        fitness_ranking[i].nn.save(pathlib.Path(join(os.getcwd(), 'model_{}.keras'.format(i))))
+    # Elitism: preserve the top 5 performers
+    elites = fitness_ranking[:5]
+    for i in range(5):
+        elites[i].nn.save(pathlib.Path(join(os.getcwd(), f'model_{i}.keras')))
 
-    # Generate random weights for children every generation
-    for c in children:
-        c.nn = gann.GeneticANN()
-
-    # Crossover between best 5, generate enough children for the population
-    k = 0  # Start from 0 since no human player
-    for i in range(0, 5):
-        for j in range(0, 5):
-            if k < len(children):  # Safety check
-                # Create a child and add to networks
-                children[k].nn = gann.dynamic_crossover(fitness_ranking[i].nn, fitness_ranking[j].nn)
-                k += 1
+    # Create new generation with tournament selection
+    new_population = elites  # Start with the elites
     
-    # Fill remaining children by repeating crossover with random selection
-    while k < len(children):
-        i = random.randint(0, 4)  # Random parent from top 5
-        j = random.randint(0, 4)  # Random parent from top 5
-        children[k].nn = gann.dynamic_crossover(fitness_ranking[i].nn, fitness_ranking[j].nn)
-        k += 1
+    # Fill the rest of the population with children from tournament winners
+    while len(new_population) < len(players):
+        parent1 = tournament_selection(fitness_ranking)
+        parent2 = tournament_selection(fitness_ranking)
+        
+        # Ensure parents are not the same for better diversity
+        while parent1 == parent2:
+            parent2 = tournament_selection(fitness_ranking)
+            
+        child_nn = gann.dynamic_crossover(parent1.nn, parent2.nn)
+        gann.mutation(child_nn)  # Apply mutation to the child
+        
+        # Create a new player with the child's neural network
+        child_player = Player()
+        child_player.nn = child_nn
+        new_population.append(child_player)
 
-    # Substitute population's neural networks
-    for i in range(0, len(players)):  # All players are AI now
-        if i < len(children):  # Safety check
-            players[i].nn = children[i].nn
+    # Replace old population with the new one
+    for i in range(len(players)):
+        players[i].nn = new_population[i].nn
 
 
 def tournament_selection(population, tournament_size=3):
@@ -387,10 +359,8 @@ def main():
             # Every generation clear screen and update
             screen.blit(background, (0, 0))
             pygame.display.flip()
-            # Every N generations, change the start and target's position
-            div, res = divmod(generation, 10)
-            if res == 0:
-                randomize_objectives()
+            # Every generation, change the start and target's position to promote generalization
+            randomize_objectives()
             # Reset all players positions after last play
             reset_players(players)
 
@@ -437,6 +407,11 @@ def main():
                 step += 1
                 if step == 30:
                     running = False
+
+            # Apply a penalty for hitting a wall
+            for p in players:
+                if p.lose_status:
+                    p.nn.fitness *= 0.5  # Reduce fitness by 50% for failure
 
             update_generation(generation, players, children)
 
