@@ -1,3 +1,5 @@
 *.keras
 *.log
 __pycache__
+.venv
+
